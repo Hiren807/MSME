@@ -13,7 +13,7 @@
    with fetch() calls to your API and keep the rest of the app unchanged.
    ========================================================================= */
 
-const RM = { name:"Demo@123", role:"MSME Relationship Manager", branch:"Andheri (E) Branch, Mumbai", initials:"DE" };
+const RM = { name:"Priya Deshmukh", role:"MSME Relationship Manager", branch:"Andheri (E) Branch, Mumbai", initials:"PD" };
 // Baked in deliberately: these Firebase config values are not secret credentials —
 // access is governed by Firestore Security Rules and Firebase Auth on the project
 // itself, not by hiding this object. Baking it in means the app has a real,
@@ -71,14 +71,14 @@ const SUBSIDY_SCHEMES = {
 };
 
 const DOC_LIST = [
-  {key:"PAN", label:"PAN Card", desc:"Permanent Account Number of the business/owner", ico:"&#128196;"},
-  {key:"GST", label:"GST Certificate", desc:"Goods & Services Tax registration certificate", ico:"&#128220;"},
-  {key:"UDYAM", label:"Udyam Registration", desc:"MSME Udyam registration certificate", ico:"&#127970;"},
-  {key:"ITR", label:"ITR (Last 2 Years)", desc:"Income tax returns of the business", ico:"&#128203;"},
-  {key:"BANKSTMT", label:"Bank Statement (12M)", desc:"Last 12 months current account statement", ico:"&#127974;"},
-  {key:"FINSTMT", label:"Financial Statements", desc:"Audited/provisional P&L and balance sheet", ico:"&#128202;"},
-  {key:"BIZREG", label:"Business Registration Certificate", desc:"Partnership deed / COI / Shop Act license", ico:"&#128209;"},
-  {key:"ADDRESS", label:"Address Proof", desc:"Business premises address proof / utility bill", ico:"&#128205;"}
+  {key:"PAN", label:"PAN card", desc:"Permanent Account Number of the business/owner", ico:"PAN"},
+  {key:"GST", label:"GST certificate", desc:"Goods & Services Tax registration certificate", ico:"GST"},
+  {key:"UDYAM", label:"Udyam registration", desc:"MSME Udyam registration certificate", ico:"UDY"},
+  {key:"ITR", label:"ITR (last 2 years)", desc:"Income tax returns of the business", ico:"ITR"},
+  {key:"BANKSTMT", label:"Bank statement (12M)", desc:"Last 12 months current account statement", ico:"BNK"},
+  {key:"FINSTMT", label:"Financial statements", desc:"Audited/provisional P&L and balance sheet", ico:"FIN"},
+  {key:"BIZREG", label:"Business registration certificate", desc:"Partnership deed / COI / Shop Act license", ico:"REG"},
+  {key:"ADDRESS", label:"Address proof", desc:"Business premises address proof / utility bill", ico:"ADR"}
 ];
 const DOC_WEIGHT = { "Pending":0, "Uploaded":0.5, "Under Verification":0.75, "Verified":1 };
 const DOC_NEXT = { "Pending":"Uploaded", "Uploaded":"Under Verification", "Under Verification":"Verified", "Verified":"Verified" };
@@ -97,31 +97,31 @@ const PRODUCT_MAP = {
 const PURPOSE_DEFAULT_TENURE = { "Working Capital":3, "Machinery Purchase":5, "Business Expansion":7, "Inventory Purchase":2, "Commercial Vehicle":5, "Other":4 };
 
 const FIN_FIELDS = [
-  {key:"curRevenue", label:"Current Year Revenue (&#8377;)"},
-  {key:"prevRevenue", label:"Previous Year Revenue (&#8377;)"},
-  {key:"curProfit", label:"Current Year Profit (&#8377;)"},
-  {key:"prevProfit", label:"Previous Year Profit (&#8377;)"},
-  {key:"currentAssets", label:"Current Assets (&#8377;)"},
-  {key:"currentLiabilities", label:"Current Liabilities (&#8377;)"},
-  {key:"totalDebt", label:"Total Debt (&#8377;)"},
+  {key:"curRevenue", label:"Current year revenue (&#8377;)"},
+  {key:"prevRevenue", label:"Previous year revenue (&#8377;)"},
+  {key:"curProfit", label:"Current year profit (&#8377;)"},
+  {key:"prevProfit", label:"Previous year profit (&#8377;)"},
+  {key:"currentAssets", label:"Current assets (&#8377;)"},
+  {key:"currentLiabilities", label:"Current liabilities (&#8377;)"},
+  {key:"totalDebt", label:"Total debt (&#8377;)"},
   {key:"equity", label:"Equity (&#8377;)"},
-  {key:"annualDebtObligation", label:"Annual Debt Obligation (&#8377;)"},
-  {key:"cashFlow", label:"Cash Flow Available for Debt Service (&#8377;)"}
+  {key:"annualDebtObligation", label:"Annual debt obligation (&#8377;)"},
+  {key:"cashFlow", label:"Cash flow available for debt service (&#8377;)"}
 ];
 
 const NAV_ITEMS = [
-  {view:"dashboard", label:"Dashboard", ico:"&#128202;", roles:["rm"]},
-  {view:"newapp", label:"New MSME Application", ico:"&#10133;", roles:["rm"]},
-  {view:"profile", label:"Customer Profile", ico:"&#128100;", needsApp:true, roles:["rm","customer"]},
-  {view:"documents", label:"Documents", ico:"&#128193;", needsApp:true, roles:["rm","customer"]},
-  {view:"financials", label:"Financial Analysis", ico:"&#128200;", needsApp:true, roles:["rm"]},
-  {view:"credit", label:"Credit Assessment", ico:"&#128179;", needsApp:true, roles:["rm"]},
-  {view:"eligibility", label:"Loan Eligibility", ico:"&#129518;", needsApp:true, roles:["rm","customer"]},
-  {view:"aiinsights", label:"AI Business Insights", ico:"&#10024;", needsApp:true, roles:["rm"]},
-  {view:"recommendation", label:"Loan Recommendation", ico:"&#127919;", needsApp:true, roles:["rm","customer"]},
-  {view:"decision", label:"Application Decision", ico:"&#9989;", needsApp:true, roles:["rm","customer"]},
-  {view:"tracking", label:"Application Tracking", ico:"&#128203;", roles:["rm"]},
-  {view:"cloudsettings", label:"Cloud Storage", ico:"&#9729;&#65039;", roles:["rm"]}
+  {view:"dashboard", label:"Dashboard", ico:"home", group:"pipeline", roles:["rm"]},
+  {view:"tracking", label:"Application tracking", ico:"list", group:"pipeline", roles:["rm"]},
+  {view:"newapp", label:"New application", ico:"plus", group:"pipeline", roles:["rm"]},
+  {view:"profile", label:"Customer profile", ico:"user", group:"file", needsApp:true, roles:["rm","customer"]},
+  {view:"documents", label:"Documents", ico:"folder", group:"file", needsApp:true, roles:["rm","customer"]},
+  {view:"financials", label:"Financial analysis", ico:"chart", group:"file", needsApp:true, roles:["rm"]},
+  {view:"credit", label:"Credit assessment", ico:"gauge", group:"file", needsApp:true, roles:["rm"]},
+  {view:"eligibility", label:"Eligibility & pricing", ico:"calc", group:"file", needsApp:true, roles:["rm","customer"]},
+  {view:"aiinsights", label:"AI business insights", ico:"note", group:"file", needsApp:true, roles:["rm"]},
+  {view:"recommendation", label:"Loan recommendation", ico:"target", group:"file", needsApp:true, roles:["rm","customer"]},
+  {view:"decision", label:"Decision", ico:"check", group:"file", needsApp:true, roles:["rm","customer"]},
+  {view:"cloudsettings", label:"Cloud storage", ico:"cloud", group:"settings", roles:["rm"]}
 ];
 
 /* ===================== SHELL RENDER ===================== */
