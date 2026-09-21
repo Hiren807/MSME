@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # MSME Origination Toolkit
 
 An academic prototype built for MBA coursework in Microfinance & Banking. It
@@ -135,3 +136,6 @@ especially once a real backend and real credentials exist.
   without it, data lives only in the browser that created it.
 - Login has no real authentication, encryption, or backend — never use it
   with real customer data or real credentials.
+=======
+# MSME
+>>>>>>> 61be53ecbd0ec78b6a01d955b3d3ed33527c39a2
