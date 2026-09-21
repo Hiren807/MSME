@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MSME Origination Toolkit</title>
+
+<!-- Google Fonts: Manrope (display), Inter (body), JetBrains Mono (mono/figures) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div id="root"></div>
+<div id="toastHost"></div>
+
+<!-- Load order matters: dummy-data.js and calculations.js declare constants/
+     functions that app.js relies on. All three are classic (non-module)
+     scripts sharing one global scope, so this order must be preserved. -->
+<script src="js/dummy-data.js"></script>
+<script src="js/calculations.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+# --- Secrets & credentials: never commit these ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+firebase-config*.json
+service-account*.json
+supabase-credentials*.json
+credentials.json
+
+# --- Dependencies (once a backend/build step is added) ---
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# --- Build output ---
+dist/
+build/
+.next/
+out/
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+npm-debug.log*
+
+# --- Local database files (once a real DB is introduced) ---
+*.sqlite
+*.sqlite3
+*.db
