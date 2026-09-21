@@ -89,16 +89,71 @@ function loanCapCheck(app){
   if(cap===null) return { type, cap:null, withinCap:true };
   return { type, cap, withinCap: app.loan.amount <= cap };
 }
+function financialDataQuality(fin){
+  const issues = [];
+  const curRevenue = Number(fin.curRevenue)||0;
+  const prevRevenue = Number(fin.prevRevenue)||0;
+  const curProfit = Number(fin.curProfit)||0;
+  const prevProfit = Number(fin.prevProfit)||0;
+  const currentAssets = Number(fin.currentAssets)||0;
+  const currentLiabilities = Number(fin.currentLiabilities)||0;
+  const totalDebt = Number(fin.totalDebt)||0;
+  const equity = Number(fin.equity)||0;
+  const annualDebtObligation = Number(fin.annualDebtObligation)||0;
+  const cashFlow = Number(fin.cashFlow)||0;
+
+  if(curRevenue<=0) issues.push("Current-year revenue must be greater than ₹0.");
+  if(prevRevenue<0) issues.push("Previous-year revenue cannot be negative.");
+  if(curProfit<0) issues.push("Current-year net profit is negative; the analysis will treat this as a loss.");
+  if(prevProfit<0) issues.push("Previous-year net profit is negative; profit growth is not interpreted as a normal percentage.");
+  if(curRevenue>0 && curProfit>curRevenue) issues.push("Current-year net profit is greater than revenue; check the entered figures.");
+  if(prevRevenue>0 && prevProfit>prevRevenue) issues.push("Previous-year net profit is greater than revenue; check the entered figures.");
+  if(currentAssets<0 || currentLiabilities<0) issues.push("Current assets and current liabilities should not be negative.");
+  if(totalDebt<0) issues.push("Total debt cannot be negative.");
+  if(equity<=0) issues.push("Positive equity is required to calculate a meaningful debt-to-equity ratio.");
+  if(annualDebtObligation<0) issues.push("Annual debt obligation cannot be negative.");
+  if(cashFlow<0) issues.push("Cash flow available for debt service is negative; this indicates a cash shortfall rather than normal repayment capacity.");
+
+  return { valid: issues.filter(i => !i.startsWith("Current-year net profit is negative") && !i.startsWith("Previous-year net profit is negative") && !i.startsWith("Cash flow available for debt service is negative")).length===0, issues };
+}
+
 function calcRatios(fin){
-  const revenueGrowth = fin.prevRevenue ? ((fin.curRevenue - fin.prevRevenue) / fin.prevRevenue) * 100 : 0;
-  const profitMargin = fin.curRevenue ? (fin.curProfit / fin.curRevenue) * 100 : 0;
-  const currentRatio = fin.currentLiabilities ? (fin.currentAssets / fin.currentLiabilities) : 0;
-  const debtEquity = fin.equity ? (fin.totalDebt / fin.equity) : 0;
-  const dscr = fin.annualDebtObligation ? (fin.cashFlow / fin.annualDebtObligation) : 0;
-  return { revenueGrowth, profitMargin, currentRatio, debtEquity, dscr };
+  const curRevenue = Number(fin.curRevenue)||0;
+  const prevRevenue = Number(fin.prevRevenue)||0;
+  const curProfit = Number(fin.curProfit)||0;
+  const prevProfit = Number(fin.prevProfit)||0;
+  const currentAssets = Number(fin.currentAssets)||0;
+  const currentLiabilities = Number(fin.currentLiabilities)||0;
+  const totalDebt = Number(fin.totalDebt)||0;
+  const equity = Number(fin.equity)||0;
+  const annualDebtObligation = Number(fin.annualDebtObligation)||0;
+  const cashFlow = Number(fin.cashFlow)||0;
+
+  const revenueGrowth = prevRevenue>0 && curRevenue>=0 ? ((curRevenue-prevRevenue)/prevRevenue)*100 : null;
+  const revenueBasedInputsSane = curRevenue>0 && curProfit<=curRevenue;
+  const profitMargin = revenueBasedInputsSane ? (curProfit/curRevenue)*100 : null;
+  const profitGrowth = prevProfit>0 && curProfit>=0 && prevProfit<=prevRevenue ? ((curProfit-prevProfit)/prevProfit)*100 : null;
+  const currentRatio = currentLiabilities>0 ? (currentAssets/currentLiabilities) : null;
+  const debtEquity = equity>0 ? (totalDebt/equity) : null;
+  const dscr = annualDebtObligation>0 ? (cashFlow/annualDebtObligation) : null;
+  const workingCapital = currentAssets-currentLiabilities;
+  const cashFlowMargin = revenueBasedInputsSane ? (cashFlow/curRevenue)*100 : null;
+  const dataQuality = financialDataQuality(fin);
+
+  return { revenueGrowth, profitMargin, profitGrowth, currentRatio, debtEquity, dscr, workingCapital, cashFlowMargin, dataQuality };
 }
 
 function interpretRatio(key, val){
+  if(val===null || val===undefined || Number.isNaN(Number(val))){
+    const missing = {
+      revenueGrowth:"N/A — previous-year revenue is required",
+      profitMargin:"N/A — current-year revenue is required",
+      currentRatio:"N/A — current liabilities are required",
+      debtEquity:"N/A — positive equity is required",
+      dscr:"N/A — annual debt service is required"
+    };
+    return {tag:missing[key] || "N/A", tone:"warn"};
+  }
   switch(key){
     case "revenueGrowth":
       if(val>=15) return {tag:"Strong growth momentum", tone:"good"};
@@ -106,20 +161,22 @@ function interpretRatio(key, val){
       if(val>=0) return {tag:"Flat / slow growth", tone:"warn"};
       return {tag:"Declining revenue trend", tone:"bad"};
     case "profitMargin":
-      if(val>=15) return {tag:"Highly healthy profitability", tone:"good"};
+      if(val>=15) return {tag:"Strong profitability", tone:"good"};
       if(val>=8) return {tag:"Healthy profitability", tone:"good"};
-      if(val>=4) return {tag:"Thin but acceptable margin", tone:"ok"};
-      return {tag:"Weak profitability", tone:"bad"};
+      if(val>=4) return {tag:"Moderate profitability", tone:"ok"};
+      if(val>0) return {tag:"Thin profitability", tone:"warn"};
+      return {tag:"Loss / no profit", tone:"bad"};
     case "currentRatio":
       if(val>=1.5) return {tag:"Good short-term liquidity", tone:"good"};
       if(val>=1.1) return {tag:"Adequate liquidity", tone:"ok"};
       if(val>=0.9) return {tag:"Tight liquidity", tone:"warn"};
       return {tag:"Weak liquidity position", tone:"bad"};
     case "debtEquity":
-      if(val<=0.75) return {tag:"Conservative debt level", tone:"good"};
+      if(val===0) return {tag:"No reported debt", tone:"good"};
+      if(val<=0.75) return {tag:"Conservative leverage", tone:"good"};
       if(val<=1.25) return {tag:"Moderate leverage", tone:"ok"};
       if(val<=2) return {tag:"Elevated leverage", tone:"warn"};
-      return {tag:"High leverage risk", tone:"bad"};
+      return {tag:"High leverage", tone:"bad"};
     case "dscr":
       if(val>=1.5) return {tag:"Comfortable debt repayment capacity", tone:"good"};
       if(val>=1.2) return {tag:"Adequate repayment capacity", tone:"ok"};
@@ -130,17 +187,29 @@ function interpretRatio(key, val){
 }
 
 function financialHealth(r){
+  if(!r.dataQuality.valid || r.revenueGrowth===null || r.profitMargin===null || r.currentRatio===null || r.debtEquity===null){
+    return "Incomplete Data";
+  }
   let score = 0;
-  score += r.revenueGrowth>=10 ? 2 : (r.revenueGrowth>=0 ? 1 : 0);
-  score += r.profitMargin>=12 ? 2 : (r.profitMargin>=6 ? 1 : 0);
-  score += r.currentRatio>=1.4 ? 2 : (r.currentRatio>=1.1 ? 1 : 0);
-  score += r.debtEquity<=1 ? 2 : (r.debtEquity<=1.75 ? 1 : 0);
-  score += r.dscr>=1.4 ? 2 : (r.dscr>=1.1 ? 1 : 0);
-  // score out of 10
-  if(score>=8) return "Excellent";
-  if(score>=6) return "Good";
-  if(score>=4) return "Moderate";
+  let maxScore = 0;
+  score += r.revenueGrowth>=10 ? 2 : (r.revenueGrowth>=0 ? 1 : 0); maxScore += 2;
+  score += r.profitMargin>=12 ? 2 : (r.profitMargin>=6 ? 1 : 0); maxScore += 2;
+  score += r.currentRatio>=1.4 ? 2 : (r.currentRatio>=1.1 ? 1 : 0); maxScore += 2;
+  score += r.debtEquity<=1 ? 2 : (r.debtEquity<=1.75 ? 1 : 0); maxScore += 2;
+  if(r.dscr!==null){
+    score += r.dscr>=1.4 ? 2 : (r.dscr>=1.1 ? 1 : 0);
+    maxScore += 2;
+  }
+  const ratio = score/maxScore;
+  if(ratio>=0.80) return "Excellent";
+  if(ratio>=0.60) return "Good";
+  if(ratio>=0.40) return "Moderate";
   return "Weak";
+}
+
+function financialDataQualityTone(r){
+  if(r.dataQuality.valid && r.revenueGrowth!==null && r.profitMargin!==null && r.currentRatio!==null && r.debtEquity!==null && r.dscr!==null) return "good";
+  return "warn";
 }
 
 function debtScoreFromDE(de){
@@ -155,11 +224,11 @@ function debtScoreFromDE(de){
 function calcCreditScore(app){
   const r = calcRatios(app.fin);
   const creditHistory = clamp(app.creditInputs.creditHistory,0,25);
-  const revenueGrowthScore = clamp(r.revenueGrowth,0,20);
-  const profitabilityScore = clamp(r.profitMargin*0.75,0,15);
+  const revenueGrowthScore = r.revenueGrowth===null ? 0 : clamp(r.revenueGrowth,0,20);
+  const profitabilityScore = r.profitMargin===null ? 0 : clamp(r.profitMargin*0.75,0,15);
   const bankingBehaviour = clamp(app.creditInputs.bankingBehaviour,0,15);
   const vintageScore = clamp(app.yearsInBusiness,0,10);
-  const existingDebtScore = debtScoreFromDE(r.debtEquity);
+  const existingDebtScore = r.debtEquity===null ? 0 : debtScoreFromDE(r.debtEquity);
   const complianceCount = (app.udyam==="Registered"?1:0) + (app.gst==="Registered"?1:0);
   const complianceScore = complianceCount===2?5:(complianceCount===1?2.5:0);
   const total = creditHistory+revenueGrowthScore+profitabilityScore+bankingBehaviour+vintageScore+existingDebtScore+complianceScore;
@@ -243,33 +312,39 @@ function aiInsights(app){
   const seg = segmentOf(app);
   const strengths = [];
   const concerns = [];
-  if(r.revenueGrowth>=10) strengths.push("Stable / strong revenue growth (" + fmtNum(r.revenueGrowth) + "%)");
-  if(r.profitMargin>=8) strengths.push("Healthy profitability (" + fmtNum(r.profitMargin) + "% margin)");
+
+  if(r.revenueGrowth!==null && r.revenueGrowth>=10) strengths.push("Stable / strong revenue growth (" + fmtNum(r.revenueGrowth) + "%)");
+  if(r.profitMargin!==null && r.profitMargin>=8) strengths.push("Healthy profitability (" + fmtNum(r.profitMargin) + "% margin)");
   if(app.yearsInBusiness>=5) strengths.push("Established operating track record (" + app.yearsInBusiness + " years)");
   if(app.udyam==="Registered" && app.gst==="Registered") strengths.push("Fully compliant on GST & Udyam registration");
-  if(r.dscr>=1.4) strengths.push("Comfortable debt repayment capacity");
+  if(r.currentRatio!==null && r.currentRatio>=1.5) strengths.push("Positive short-term liquidity position (" + fmtNum(r.currentRatio,2) + "x current ratio)");
+  if(r.dscr!==null && r.dscr>=1.4) strengths.push("Comfortable debt repayment capacity (" + fmtNum(r.dscr,2) + "x DSCR)");
   if(cs.total>=75) strengths.push("Strong overall credit risk profile");
-  if(strengths.length===0) strengths.push("Business is operational with a defined loan requirement");
+  if(strengths.length===0) strengths.push("Business information is available for further financial and credit review");
 
-  if(r.debtEquity>1.5) concerns.push("Elevated existing debt relative to equity");
+  if(r.debtEquity!==null && r.debtEquity>1.5) concerns.push("Elevated existing debt relative to equity");
   if(dc<100) concerns.push("Pending / unverified documents (" + dc + "% complete)");
-  if(r.revenueGrowth<5) concerns.push("Slow or flat revenue growth trend");
+  if(r.revenueGrowth!==null && r.revenueGrowth<5) concerns.push("Slow or declining revenue growth trend");
+  if(r.profitMargin!==null && r.profitMargin<4) concerns.push("Thin or negative profitability");
   if(app.gst!=="Registered") concerns.push("GST registration not yet completed");
   if(app.udyam!=="Registered") concerns.push("Udyam registration not yet completed");
-  if(r.currentRatio<1.1) concerns.push("Tight short-term liquidity position");
-  if(r.dscr<1.2) concerns.push("Limited buffer in debt repayment coverage");
-  if(concerns.length===0) concerns.push("No material concerns identified from available information");
+  if(r.currentRatio!==null && r.currentRatio<1.1) concerns.push("Tight short-term liquidity position");
+  if(r.dscr!==null && r.dscr<1.2) concerns.push("Limited buffer in debt repayment coverage");
+  if(r.cashFlowMargin!==null && r.cashFlowMargin<0) concerns.push("Negative cash flow available for debt servicing");
+  if(r.dataQuality.issues.some(x=>x.includes("revenue must be greater") || x.includes("net profit is greater than revenue") || x.includes("Positive equity"))) concerns.push("Core financial inputs need correction before ratio interpretation");
+  if(concerns.length===0) concerns.push("No material concerns identified from the available information");
 
-  const growthQ = r.revenueGrowth>=10 ? "stable and healthy" : (r.revenueGrowth>=0 ? "modest" : "declining");
-  const marginQ = r.profitMargin>=10 ? "healthy" : (r.profitMargin>=5 ? "satisfactory" : "thin");
+  const growthQ = r.revenueGrowth===null ? "not yet measurable" : (r.revenueGrowth>=10 ? "stable and healthy" : (r.revenueGrowth>=0 ? "modest" : "declining"));
+  const marginQ = r.profitMargin===null ? "not yet measurable" : (r.profitMargin>=10 ? "healthy" : (r.profitMargin>=5 ? "satisfactory" : "thin"));
   let suitability;
-  if(cs.risk==="Low Risk" && dc>=75) suitability = "the customer appears suitable for further MSME credit evaluation, subject to document verification and final underwriting";
-  else if(cs.risk==="Moderate Risk") suitability = "the customer may be considered for further credit evaluation with closer monitoring of the flagged risk factors, subject to document verification and final underwriting";
-  else suitability = "the customer would need the flagged risk factors to be addressed before being considered further, subject to full underwriting review";
+  if(!r.dataQuality.valid || r.revenueGrowth===null || r.profitMargin===null || r.currentRatio===null || r.debtEquity===null) suitability = "requires completion or correction of core financial inputs before the ratios can be interpreted reliably";
+  else if(cs.risk==="Low Risk" && dc>=75) suitability = "can proceed to further MSME credit evaluation, subject to document verification and final underwriting";
+  else if(cs.risk==="Moderate Risk") suitability = "requires closer review of the flagged risk factors during the next credit stage, subject to document verification and final underwriting";
+  else suitability = "requires the flagged risk factors to be reviewed before the next credit stage, subject to full underwriting review";
 
-  const paragraph = app.businessName + " has demonstrated " + growthQ + " revenue growth of " + fmtNum(r.revenueGrowth) + "% over the previous year, with a " + marginQ + " profit margin of " + fmtNum(r.profitMargin) + "%. " +
+  const paragraph = app.businessName + " has demonstrated " + growthQ + " revenue growth" + (r.revenueGrowth===null ? " based on the available figures" : " of " + fmtNum(r.revenueGrowth) + "% over the previous year") + ", with a " + marginQ + " profit margin" + (r.profitMargin===null ? " based on the available figures" : " of " + fmtNum(r.profitMargin) + "%") + ". " +
     "The business has an operating history of " + app.yearsInBusiness + " years and is classified as a" + (seg.maturity==="Established MSME"?"n ":" ") + seg.maturity.toLowerCase() + " (" + seg.size.toLowerCase() + "). " +
-    "Existing debt levels are reflected in a debt-to-equity ratio of " + fmtNum(r.debtEquity,2) + "x, and the current debt service coverage ratio stands at " + fmtNum(r.dscr,2) + "x. " +
+    "Existing debt levels are reflected in a debt-to-equity ratio of " + (r.debtEquity===null ? "N/A" : fmtNum(r.debtEquity,2)+"x") + ", and the debt service coverage ratio is " + (r.dscr===null ? "not applicable because no annual debt obligation is reported" : fmtNum(r.dscr,2)+"x") + ". " +
     "Based on the available information, " + suitability + ".";
 
   return { paragraph, strengths, concerns, suggestedPurpose: app.loan.purpose, segment: seg };

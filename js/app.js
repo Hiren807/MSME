@@ -30,27 +30,59 @@ function freshDocs(pattern){
 // so it's safe to use directly from this file once an RM pastes in their own free project's
 // config. Until that's done, the toolkit transparently falls back to this browser's local
 // storage, so the app keeps working exactly as before.
-let CLOUD = { provider:"local", firebaseConfig:null, connected:false, db:null, syncing:false, lastSync:null, unsub:null, applyingRemote:false, auth:null, authReady:false };
+const FIREBASE_APP_NAME = "msmeToolkitApp";
+let CLOUD = { provider:"local", firebaseConfig:null, connected:false, db:null, syncing:false, lastSync:null, unsub:null, applyingRemote:false, auth:null, authReady:false, authUnsub:null, lastError:null, fbApp:null };
+
+function clearFirebaseListeners(){
+  if(CLOUD.unsub){ try{ CLOUD.unsub(); }catch(err){} }
+  CLOUD.unsub = null;
+  if(CLOUD.authUnsub){ try{ CLOUD.authUnsub(); }catch(err){} }
+  CLOUD.authUnsub = null;
+}
+
+function firebaseConfigsMatch(a,b){
+  if(!a || !b) return false;
+  return ["apiKey","authDomain","projectId","appId"].every(k => String(a[k] || "") === String(b[k] || ""));
+}
 
 async function connectFirebase(configObj){
   try{
     const appMod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
     const fsMod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-    const fbApp = appMod.initializeApp(configObj);
+    const { initializeApp, getApps, deleteApp } = appMod;
+
+    // This app used to call initializeApp() every time the user clicked
+    // "Connect Cloud Storage". Because boot already initialized Firebase,
+    // Firebase then threw "already exists" for the [DEFAULT] app and the
+    // manual connect button could never reconnect to a project. Use one
+    // named app for this toolkit and reuse/rebuild it safely instead.
+    let fbApp = getApps().find(app => app.name === FIREBASE_APP_NAME) || null;
+    if(fbApp && !firebaseConfigsMatch(fbApp.options, configObj)){
+      clearFirebaseListeners();
+      try{ await deleteApp(fbApp); }catch(err){ console.warn("Could not delete previous Firebase app:", err); }
+      fbApp = null;
+    }
+    if(!fbApp) fbApp = initializeApp(configObj, FIREBASE_APP_NAME);
+
+    // Stop listeners owned by the previous CLOUD connection before replacing
+    // the references. This also prevents duplicate realtime callbacks.
+    clearFirebaseListeners();
+
     CLOUD.fbApp = fbApp;
     CLOUD.db = fsMod.getFirestore(fbApp);
     CLOUD._fs = fsMod;
     CLOUD.provider = "firebase";
     CLOUD.firebaseConfig = configObj;
     CLOUD.connected = true;
+    CLOUD.lastError = null;
     // Deliberately does NOT push here — connecting must never silently overwrite
-    // whatever's already in the project. Callers decide pull-vs-push (see
-    // submitFirebaseConfig and loadData below).
+    // whatever's already in the project. Callers decide pull-vs-push.
     startRealtimeSync();
     return true;
   }catch(err){
     console.error("Firebase connection failed:", err);
     CLOUD.connected = false;
+    CLOUD.lastError = err;
     return false;
   }
 }
@@ -64,7 +96,8 @@ async function initFirebaseAuth(){
     CLOUD._auth = authMod;
     CLOUD.auth = authMod.getAuth(CLOUD.fbApp);
     CLOUD.authReady = true;
-    authMod.onAuthStateChanged(CLOUD.auth, (user)=>{
+    if(CLOUD.authUnsub){ try{ CLOUD.authUnsub(); }catch(err){} }
+    CLOUD.authUnsub = authMod.onAuthStateChanged(CLOUD.auth, (user)=>{
       if(user && !AUTH.loggedIn){
         // Restores a real, persisted Firebase session on page reload — the RM
         // never has to log in again on the same browser until they explicitly log out.
@@ -125,17 +158,19 @@ function startRealtimeSync(){
 }
 async function cloudPush(){
   if(CLOUD.provider!=="firebase" || !CLOUD.connected) return false;
+  CLOUD.lastError = null;
   try{
     CLOUD.syncing = true;
     const { doc, setDoc } = CLOUD._fs;
     await setDoc(doc(CLOUD.db, "msmeToolkit", "applications"), { data: JSON.stringify(applications), nextAppSeq, notifications: JSON.stringify(notifications), updatedAt: new Date().toISOString() });
     CLOUD.lastSync = new Date().toISOString();
     return true;
-  }catch(err){ console.error("Cloud push failed:", err); return false; }
+  }catch(err){ console.error("Cloud push failed:", err); CLOUD.lastError = err; return false; }
   finally{ CLOUD.syncing = false; }
 }
 async function cloudPull(){
   if(CLOUD.provider!=="firebase" || !CLOUD.connected) return false;
+  CLOUD.lastError = null;
   try{
     const { doc, getDoc } = CLOUD._fs;
     const snap = await getDoc(doc(CLOUD.db, "msmeToolkit", "applications"));
@@ -146,12 +181,12 @@ async function cloudPull(){
       if(d.notifications) notifications = JSON.parse(d.notifications);
       return true;
     }
-  }catch(err){ console.error("Cloud pull failed:", err); }
+  }catch(err){ console.error("Cloud pull failed:", err); CLOUD.lastError = err; }
   return false;
 }
 function disconnectCloud(){
-  if(CLOUD.unsub){ try{ CLOUD.unsub(); }catch(err){} }
-  CLOUD = { provider:"local", firebaseConfig:null, connected:false, db:null, syncing:false, lastSync:null, unsub:null, applyingRemote:false };
+  clearFirebaseListeners();
+  CLOUD = { provider:"local", firebaseConfig:null, connected:false, db:null, syncing:false, lastSync:null, unsub:null, applyingRemote:false, auth:null, authReady:false, authUnsub:null, lastError:null, fbApp:null };
   saveData(); render();
 }
 
@@ -180,6 +215,7 @@ function loadData(){
       // DIFFERENT Firebase project via the Cloud Storage paste-in box. The
       // default project (FIREBASE_CONFIG) is already connected at boot, below.
       connectFirebase(saved.firebaseConfig).then(async ()=>{
+        await initFirebaseAuth();
         // Safety: never let reconnecting on page load silently overwrite this
         // browser's local data with a smaller (or empty) remote copy. Only
         // adopt remote data if it has at least as much as we already have
@@ -703,9 +739,6 @@ function submitNewApp(e){
 function cloudSettingsHTML(){
   const connected = CLOUD.provider==="firebase" && CLOUD.connected;
   return pageHead("Cloud Storage", "Store application data in a real cloud database instead of just this browser", "Settings") +
-  '<div class="callout callout-disclaimer" style="margin-bottom:16px;">A static HTML prototype like this one cannot safely embed real database passwords or run server-side code. '+
-    'What it <em>can</em> do is connect to <strong>Firebase Firestore</strong> &mdash; Google\'s free, no-backend cloud database built for exactly this kind of client-side app. '+
-    'Its config values aren\'t secret keys; access is controlled by Firestore Security Rules on your own project. Without a connection, application data is saved to this browser\'s local storage only (as before).</div>'+
   '<div class="grid grid-2">'+
     '<div class="card">'+
       '<div class="section-title">Connection Status</div>'+
@@ -726,21 +759,69 @@ function cloudSettingsHTML(){
   '</div>'+
   disclaimerHTML();
 }
+function parseFirebaseConfigInput(raw){
+  // Firebase Console commonly shows the config as a JavaScript object:
+  // const firebaseConfig = { apiKey: "...", ... };
+  // That is valid JavaScript but NOT strict JSON because of the optional
+  // variable declaration, unquoted property names, and trailing semicolon.
+  // Accept both formats without using eval/new Function.
+  let text = String(raw || "").trim();
+  if(!text) throw new Error("empty");
+
+  // Remove markdown code fences when someone pastes a fenced snippet.
+  text = text.replace(/^```(?:json|javascript|js)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  // Keep only the object portion if Firebase copied the declaration around it.
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if(firstBrace >= 0 && lastBrace > firstBrace){
+    text = text.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  // Convert the common Firebase JS object shape to JSON-safe text.
+  text = text.replace(/,\s*$/, "");
+  if(text.endsWith(";")) text = text.slice(0, -1).trim();
+  text = text.replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":');
+
+  const cfg = JSON.parse(text);
+  if(!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("not-object");
+  return cfg;
+}
+
 function submitFirebaseConfig(){
   const raw = document.getElementById("fbConfigInput").value.trim();
   if(!raw){ showToast("Paste your Firebase config first."); return; }
   let cfg;
-  try{ cfg = JSON.parse(raw); }catch(err){ showToast("That doesn't look like valid JSON — copy the config object exactly as Firebase shows it."); return; }
+  try{ cfg = parseFirebaseConfigInput(raw); }catch(err){
+    showToast("Couldn't read that Firebase config. Paste the config object from Firebase Console, with or without the final semicolon.");
+    return;
+  }
   const required = ["apiKey","authDomain","projectId","appId"];
   const missing = required.filter(k => !cfg[k]);
   if(missing.length){ showToast("Config is missing: " + missing.join(", ") + ". Copy the full object from Firebase Console \u2192 Project Settings."); return; }
   showToast("Connecting to Firebase...");
   connectFirebase(cfg).then(async ok=>{
     if(!ok){ showToast("Couldn't connect. Check the config values and your network, then try again."); return; }
+    // Re-initialize Auth against the newly selected Firebase project. This is
+    // important when the RM switches from the baked-in demo project to their
+    // own project from this screen.
+    await initFirebaseAuth();
+
     // Pull first so connecting never clobbers data another RM already pushed.
     // Only seed the project with this browser's local data if it's genuinely empty.
     const hadRemoteData = await cloudPull();
-    if(!hadRemoteData){ await cloudPush(); }
+    if(CLOUD.lastError){
+      const msg = CLOUD.lastError.code === "permission-denied"
+        ? "Firebase connected, but Firestore denied access. Check your Firestore Security Rules."
+        : "Firebase connected, but Firestore could not be read: " + (CLOUD.lastError.message || "check the project and network.");
+      showToast(msg);
+      return;
+    }
+    if(!hadRemoteData) await cloudPush();
+    if(CLOUD.lastError){
+      showToast("Firebase connected, but the initial data could not be saved: " + (CLOUD.lastError.message || "check your Firestore rules."));
+      return;
+    }
     saveData();
     render();
     showToast(hadRemoteData
@@ -910,21 +991,18 @@ function documentsHTML(){
     const status = app.documents[doc.key];
     const badgeCls = {"Pending":"badge-Pending","Uploaded":"badge-Uploaded","Under Verification":"badge-UnderVerification","Verified":"badge-Verified"}[status];
     const hasFile = app.docFiles && app.docFiles[doc.key];
-    const viewBtn = hasFile ? '<button type="button" class="btn btn-outline btn-sm" onclick="viewDocFile(\''+app.id+'\',\''+doc.key+'\')" style="min-width:70px;justify-content:center;">View</button>' : '';
+    const viewBtn = hasFile ? '<button type="button" class="btn btn-outline btn-sm doc-view-btn" title="View uploaded document" aria-label="View uploaded document" onclick="viewDocFile(\''+app.id+'\',\''+doc.key+'\')"><span aria-hidden="true">&#128065;</span></button>' : '';
     let actionBtn;
-    if(isCustomer){
-      const uploadDisabled = status==="Verified" ? "disabled" : "";
-      actionBtn = '<input type="file" id="fileInput_'+doc.key+'" style="display:none" accept="image/*,.pdf" onchange="handleDocUpload(event,\''+app.id+'\',\''+doc.key+'\')"/>'+
-        '<button type="button" class="btn btn-outline btn-sm" '+uploadDisabled+' onclick="document.getElementById(\'fileInput_'+doc.key+'\').click()" style="min-width:110px;justify-content:center;">'+(hasFile?"Re-upload":"Upload")+'</button>';
-    } else {
-      const btnDisabled = status==="Verified" ? "disabled" : "";
-      actionBtn = '<button type="button" class="btn btn-outline btn-sm" '+btnDisabled+' onclick="advanceDoc(\''+app.id+'\',\''+doc.key+'\')" style="min-width:150px;justify-content:center;">'+DOC_ACTION_LABEL[status]+'</button>';
-    }
+    const canUpload = status === "Pending" || status === "Uploaded";
+    const uploadDisabled = canUpload ? "" : "disabled";
+    const uploadLabel = hasFile ? "Re-upload" : "Upload Document";
+    actionBtn = '<input type="file" id="fileInput_'+doc.key+'" style="display:none" accept="image/*,.pdf" onchange="handleDocUpload(event,\''+app.id+'\',\''+doc.key+'\')"/>'+
+      '<button type="button" class="btn btn-outline btn-sm" '+uploadDisabled+' onclick="document.getElementById(\'fileInput_'+doc.key+'\').click()" style="min-width:150px;justify-content:center;">'+(canUpload ? uploadLabel : (DOC_ACTION_LABEL[status] || status))+'</button>';
     return '<div class="doc-row">'+
       '<div class="doc-ico">'+doc.ico+'</div>'+
       '<div class="doc-info"><div class="doc-name">'+doc.label+'</div><div class="doc-desc">'+doc.desc+(hasFile?' &middot; <span style="color:var(--teal-600);">'+escapeHtml(hasFile.name)+'</span>':'')+'</div></div>'+
       '<span class="badge '+badgeCls+'">'+status+'</span>'+
-      '<div style="display:flex;gap:8px;">'+viewBtn+actionBtn+'</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;">'+actionBtn+viewBtn+(status==="Uploaded" ? '<button type="button" class="btn btn-outline btn-sm" onclick="advanceDoc(\''+app.id+'\',\''+doc.key+'\')" style="min-width:150px;justify-content:center;">Send for Verification</button>' : '')+(status==="Under Verification" ? '<button type="button" class="btn btn-outline btn-sm" onclick="advanceDoc(\''+app.id+'\',\''+doc.key+'\')" style="min-width:150px;justify-content:center;">Mark Verified</button>' : '')+'</div>'+
     '</div>';
   }).join("");
 
@@ -990,15 +1068,24 @@ function financialsHTML(){
   const app = getApp(UI.appId);
   const r = calcRatios(app.fin);
   const health = financialHealth(r);
-  const healthColor = {"Excellent":"var(--green-600)","Good":"var(--teal-600)","Moderate":"var(--amber-600)","Weak":"var(--red-600)"}[health];
-  const healthBg = {"Excellent":"var(--green-100)","Good":"var(--teal-100)","Moderate":"var(--amber-100)","Weak":"var(--red-100)"}[health];
+  const healthColor = {
+    "Excellent":"var(--green-600)","Good":"var(--teal-600)","Moderate":"var(--amber-600)","Weak":"var(--red-600)","Incomplete Data":"var(--amber-600)"
+  }[health] || "var(--text-muted)";
+  const healthBg = {
+    "Excellent":"var(--green-100)","Good":"var(--teal-100)","Moderate":"var(--amber-100)","Weak":"var(--red-100)","Incomplete Data":"var(--amber-100)"
+  }[health] || "var(--bg)";
+  const qualityTone = financialDataQualityTone(r);
+  const seg = bankSegmentFor(app.loan.amount || 0);
 
   const inputRows = FIN_FIELDS.map(fld=>{
-    return '<div class="field"><label>'+fld.label+'</label><input type="number" value="'+app.fin[fld.key]+'" onchange="updateFinField(\''+app.id+'\',\''+fld.key+'\',this.value)"/></div>';
+    const numericValue = Number(app.fin[fld.key]);
+    const value = Number.isFinite(numericValue) ? numericValue : 0;
+    const negativeAllowed = ["cashFlow"].includes(fld.key);
+    return '<div class="field"><label>'+fld.label+'</label><input min="'+(negativeAllowed?'-999999999999':'0')+'" step="1" type="number" value="'+value+'" onchange="updateFinField(\''+app.id+'\',\''+fld.key+'\',this.value)"/></div>';
   }).join("");
 
   const ratioCard = (title, value, tooltip, interp) => {
-    const toneColor = {good:"var(--green-600)", ok:"var(--teal-600)", warn:"var(--amber-600)", bad:"var(--red-600)"}[interp.tone];
+    const toneColor = {good:"var(--green-600)", ok:"var(--teal-600)", warn:"var(--amber-600)", bad:"var(--red-600)"}[interp.tone] || "var(--text-muted)";
     return '<div class="card">'+
       '<div class="tip" style="font-size:11.5px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em;">'+title+'<span class="tt">'+tooltip+'</span></div>'+
       '<div class="mono" style="font-size:22px;font-weight:700;color:var(--navy-950);margin:6px 0 4px 0;">'+value+'</div>'+
@@ -1006,28 +1093,56 @@ function financialsHTML(){
     '</div>';
   };
 
-  return pageHead(app.businessName+" &mdash; Financial Analysis", "Enter or review financial data to compute key lending ratios automatically", "Financial Analysis") +
+  const qualityCallout = r.dataQuality.issues.length ?
+    '<div class="callout callout-warn" style="margin-bottom:14px;"><strong>&#9888;&#65039; Data quality check</strong><div style="margin-top:6px;">'+r.dataQuality.issues.map(x=>'<div style="margin-top:4px;">&bull; '+escapeHtml(x)+'</div>').join('')+'</div><div style="margin-top:8px;font-size:11.5px;color:var(--text-muted);">Correct the highlighted financial inputs to get a reliable ratio interpretation. A loss or negative cash flow is shown as a financial signal rather than treated as an input error.</div></div>' :
+    '<div class="callout callout-info" style="margin-bottom:14px;"><strong>&#9989; Financial inputs are internally consistent.</strong> The ratios below are calculated from the values entered for this application.</div>';
+
+  return pageHead(app.businessName+" &mdash; Financial Analysis", "Review financial statements, cash flow, liquidity and leverage indicators used in the lending workflow", "Financial Analysis") +
+
+  qualityCallout +
 
   '<div class="two-col">'+
     '<div>'+
       '<div class="grid grid-3" style="margin-bottom:14px;">'+
-        ratioCard("Revenue Growth", fmtNum(r.revenueGrowth)+"%", "Year-on-year growth in business revenue.", interpretRatio("revenueGrowth",r.revenueGrowth))+
-        ratioCard("Profit Margin", fmtNum(r.profitMargin)+"%", "Net profit as a percentage of revenue.", interpretRatio("profitMargin",r.profitMargin))+
-        ratioCard("Current Ratio", fmtNum(r.currentRatio,2)+"x", "Current assets divided by current liabilities &mdash; short-term liquidity.", interpretRatio("currentRatio",r.currentRatio))+
+        ratioCard("Revenue Growth", r.revenueGrowth===null?"N/A":fmtNum(r.revenueGrowth)+"%", "Year-on-year change in current revenue versus previous-year revenue.", interpretRatio("revenueGrowth",r.revenueGrowth))+
+        ratioCard("Profit Margin", r.profitMargin===null?"N/A":fmtNum(r.profitMargin)+"%", "Current-year net profit as a percentage of current-year revenue.", interpretRatio("profitMargin",r.profitMargin))+
+        ratioCard("Current Ratio", r.currentRatio===null?"N/A":fmtNum(r.currentRatio,2)+"x", "Current assets divided by current liabilities — short-term liquidity.", interpretRatio("currentRatio",r.currentRatio))+
       '</div>'+
-      '<div class="grid grid-3" style="margin-bottom:16px;">'+
-        ratioCard("Debt Level (D/E)", fmtNum(r.debtEquity,2)+"x", "Total debt divided by equity &mdash; overall leverage.", interpretRatio("debtEquity",r.debtEquity))+
-        ratioCard("DSCR (Repayment Capacity)", fmtNum(r.dscr,2)+"x", "Shows how comfortably the business can repay its debt obligations.", interpretRatio("dscr",r.dscr))+
+      '<div class="grid grid-3" style="margin-bottom:14px;">'+
+        ratioCard("Debt / Equity", r.debtEquity===null?"N/A":fmtNum(r.debtEquity,2)+"x", "Total debt divided by owners’ equity — a measure of financial leverage.", interpretRatio("debtEquity",r.debtEquity))+
+        ratioCard("DSCR", r.dscr===null?"N/A":fmtNum(r.dscr,2)+"x", "Cash flow available for debt service divided by existing annual debt obligation. A higher value means more repayment headroom.", interpretRatio("dscr",r.dscr))+
         '<div class="card" style="display:flex;flex-direction:column;justify-content:center;align-items:center;background:'+healthBg+';border-color:'+healthBg+';">'+
           '<div style="font-size:11px;font-weight:700;color:'+healthColor+';text-transform:uppercase;letter-spacing:.04em;">Financial Health</div>'+
           '<div style="font-family:var(--font-display);font-weight:800;font-size:19px;color:'+healthColor+';margin-top:4px;">'+health+'</div>'+
+          '<div style="font-size:10.5px;color:'+healthColor+';margin-top:6px;text-align:center;">Prototype composite indicator</div>'+
         '</div>'+
       '</div>'+
-      '<div class="callout callout-warn">&#9888;&#65039; These interpretations are for academic demonstration only and should not be presented as actual bank underwriting rules.</div>'+
+
+      '<div class="grid grid-3" style="margin-bottom:16px;">'+
+        '<div class="card"><div class="section-title">Working Capital</div><div class="section-sub">Current assets minus current liabilities</div><div class="mono" style="font-size:21px;font-weight:700;margin-top:8px;">'+fmtINR(r.workingCapital)+'</div><div style="font-size:11.5px;font-weight:700;color:'+(r.workingCapital>=0?'var(--green-600)':'var(--red-600)')+';margin-top:4px;">'+(r.workingCapital>=0?'Positive working-capital buffer':'Working-capital deficit')+'</div></div>'+
+        '<div class="card"><div class="section-title">Profit Growth</div><div class="section-sub">Change in net profit versus previous year</div><div class="mono" style="font-size:21px;font-weight:700;margin-top:8px;">'+(r.profitGrowth===null?'N/A':fmtNum(r.profitGrowth)+"%")+'</div><div style="font-size:11.5px;font-weight:700;color:'+(r.profitGrowth===null?'var(--amber-600)':(r.profitGrowth>=0?'var(--teal-600)':'var(--red-600)'))+';margin-top:4px;">'+(r.profitGrowth===null?'Both years need valid profit data':(r.profitGrowth>=0?'Profit improving':'Profit declining'))+'</div></div>'+
+        '<div class="card"><div class="section-title">Cash Flow Margin</div><div class="section-sub">CFADS as % of current-year revenue</div><div class="mono" style="font-size:21px;font-weight:700;margin-top:8px;">'+(r.cashFlowMargin===null?'N/A':fmtNum(r.cashFlowMargin)+"%")+'</div><div style="font-size:11.5px;font-weight:700;color:'+(r.cashFlowMargin===null?'var(--amber-600)':(r.cashFlowMargin>0?'var(--teal-600)':'var(--red-600)'))+';margin-top:4px;">'+(r.cashFlowMargin===null?'Correct revenue inputs first':(r.cashFlowMargin>0?'Positive cash generation':'Negative cash generation'))+'</div></div>'+
+      '</div>'+
+
+      '<div class="card" style="margin-bottom:16px;">'+
+        '<div class="section-title">How this application is being assessed</div>'+
+        '<div class="section-sub">The reference bank-segment document emphasizes different financial evidence as ticket size increases.</div>'+
+        '<div class="grid grid-2" style="margin-top:10px;">'+
+          statLine("Bank Segment", seg.segment)+
+          statLine("Typical Tenure", seg.tenure)+
+          statLine("Key Credit Focus", escapeHtml(seg.assessment))+
+          statLine("Typical Products", escapeHtml(seg.products))+
+        '</div>'+
+      '</div>'+
+
+      '<div class="callout callout-warn">&#9888;&#65039; Thresholds in this prototype are illustrative indicators for academic demonstration. The attached reference specifies <strong>Financials, DSCR, leverage, working capital, cash flow and stress-test focus areas</strong> by segment, but does not prescribe universal ratio cut-offs.</div>'+
     '</div>'+
     '<div class="card">'+
-      '<div class="section-title">Financial Inputs</div><div class="section-sub">Editable sample data &mdash; ratios recalculate automatically on change</div>'+
+      '<div class="section-title">Financial Inputs</div><div class="section-sub">Use the latest financial statements. Ratios recalculate automatically after each change.</div>'+
       '<div style="display:flex;flex-direction:column;gap:12px;">'+inputRows+'</div>'+
+      '<div class="divider"></div>'+
+      '<div class="section-title" style="font-size:13px;">Input guidance</div>'+
+      '<div class="section-sub" style="line-height:1.65;">Revenue and profit should come from the same reporting period. Current assets/liabilities drive working capital and the current ratio. Existing debt and owners’ equity drive leverage. Cash flow available for debt service and annual debt obligation drive DSCR.</div>'+
     '</div>'+
   '</div>'+
   disclaimerHTML();
@@ -1035,7 +1150,8 @@ function financialsHTML(){
 
 function updateFinField(appId, key, value){
   const app = getApp(appId);
-  app.fin[key] = parseFloat(value)||0;
+  const parsed = Number(value);
+  app.fin[key] = Number.isFinite(parsed) ? parsed : 0;
   render();
 }
 
